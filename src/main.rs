@@ -2,12 +2,12 @@ mod keys;
 
 use clap::Parser;
 use evdev::{Device, Synchronization, Key};
-use std::{io::{self, Write}, fs::File};
+use std::{io::{self, Write}, fs::File, thread::spawn, sync::{Arc, Mutex}, vec};
 
 const KEY_PRESSED_VALUE: i32 = 1;
 const KEY_NOT_PRESSED_VALUE: i32 = 0;
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// If true logs all events to program output. SECURITY RISK.
@@ -15,26 +15,46 @@ struct Args {
     log_events: bool,
 
     /// Virtual file to open to get keyboard input.
-    #[arg(short, long, default_value_t = String::from("/dev/input/event0"))]
-    dev_input_event_file: String
+    #[arg(short, long, default_values_t = vec![String::from("/dev/input/event0"), String::from("/dev/input/event1")])]
+    dev_input_event_file: Vec<String>
 }
 
 fn main() {
     let args = Args::parse();
 
-    match try_proxy_hid_events(args) {
-        Ok(_) => println!("Exiting normally."),
-        Err(e) => println!("Error: {}", e),
+    println!("Starting hid proxy.");
+
+    let mutex = Arc::new(Mutex::new(()));
+    let mut threads = vec![];
+
+    for dev_input_event_file in args.dev_input_event_file.clone() {
+        let args = args.clone();
+        let mutex = mutex.clone();
+
+        let handle = spawn(|| {
+            match try_proxy_hid_events(mutex, args, dev_input_event_file) {
+                Ok(_) => println!("Thread exiting normally."),
+                Err(e) => println!("Error: {}", e),
+            };
+        });
+
+        threads.push(handle);
+    }
+
+    for handle in threads {
+        match handle.join() {
+            Ok(_) => {},
+            Err(e) => println!("Error: {:?}", e),
+        }
     }
 }
 
-fn try_proxy_hid_events(args: Args) -> io::Result<()> {
-    println!("Starting hid proxy.");
-    println!("Open {}", args.dev_input_event_file);
+fn try_proxy_hid_events(mutex: Arc<Mutex<()>>, args: Args, dev_input_event_file: String) -> io::Result<()> {
+    println!("Open {}", dev_input_event_file);
 
-    let mut device = Device::open(args.dev_input_event_file)?;
+    let mut device = Device::open(dev_input_event_file.as_str())?;
 
-    println!("Grab device.");
+    println!("Grab {}", dev_input_event_file);
     device.grab()?;
 
     println!("Done");
@@ -66,7 +86,6 @@ fn try_proxy_hid_events(args: Args) -> io::Result<()> {
                             modifiers &= !modifier;
                         }
                     }
-                    println!("Modifiers: {}", modifiers);
 
                     let hid_symbol = keys::scan_to_hid(&key);
                     if hid_symbol != 0 {
@@ -90,11 +109,13 @@ fn try_proxy_hid_events(args: Args) -> io::Result<()> {
             }
         }
 
-        write_report(modifiers, &keys)?;
+        write_report(mutex.clone(), modifiers, &keys)?;
     }
 }
 
-fn write_report(modifiers: u8, keys: &Vec<Key>) -> io::Result<()> {
+fn write_report(mutex: Arc<Mutex<()>>, modifiers: u8, keys: &Vec<Key>) -> io::Result<()> {
+    let _lock = mutex.lock().unwrap();
+
     let mut report = [0u8; 8];
     report[0] = modifiers;
     // skip report[1] because report desc sends LED data here.
