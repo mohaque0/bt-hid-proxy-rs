@@ -1,23 +1,38 @@
 mod keys;
 
-use std::{io::{self, Write}, fs::File};
+use clap::Parser;
 use evdev::{Device, Synchronization, Key};
+use std::{io::{self, Write}, fs::File};
 
 const KEY_PRESSED_VALUE: i32 = 1;
 const KEY_NOT_PRESSED_VALUE: i32 = 0;
 
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// If true logs all events to program output. SECURITY RISK.
+    #[arg(short, long, default_value_t = false)]
+    log_events: bool,
+
+    /// Virtual file to open to get keyboard input.
+    #[arg(short, long, default_value_t = String::from("/dev/input/event0"))]
+    dev_input_event_file: String
+}
+
 fn main() {
-    match try_main() {
+    let args = Args::parse();
+
+    match try_proxy_hid_events(args) {
         Ok(_) => println!("Exiting normally."),
         Err(e) => println!("Error: {}", e),
     }
 }
 
-fn try_main() -> io::Result<()> {
+fn try_proxy_hid_events(args: Args) -> io::Result<()> {
     println!("Starting hid proxy.");
-    println!("Open /dev/input/event0.");
+    println!("Open {}", args.dev_input_event_file);
 
-    let mut device = Device::open("/dev/input/event0")?;
+    let mut device = Device::open(args.dev_input_event_file)?;
 
     println!("Grab device.");
     device.grab()?;
@@ -30,6 +45,10 @@ fn try_main() -> io::Result<()> {
     loop {
 
         for event in device.fetch_events()? {
+            if args.log_events {
+                println!("{:?}", event);
+            }
+
             match event.kind() {
                 evdev::InputEventKind::Synchronization(sync) => {
                     if sync == Synchronization::SYN_DROPPED {
