@@ -1,5 +1,6 @@
 mod keys;
 
+use chrono::{Local, DateTime};
 use clap::Parser;
 use evdev::{Device, Synchronization, Key};
 use std::{io::{self, Write}, fs::File, thread::spawn, sync::{Arc, Mutex}, vec};
@@ -60,13 +61,13 @@ fn try_proxy_hid_events(mutex: Arc<Mutex<()>>, args: Args, dev_input_event_file:
     println!("Done");
 
     let mut modifiers = 0;
-    let mut keys = vec![];
 
     loop {
 
         for event in device.fetch_events()? {
             if args.log_events {
-                println!("{:?}", event);
+                let timestamp: DateTime<Local> = event.timestamp().into();
+                println!("{} {:?} value={}", timestamp.format("%Y/%m/%d %T%.f"), event.kind(), event.value());
             }
 
             match event.kind() {
@@ -74,7 +75,6 @@ fn try_proxy_hid_events(mutex: Arc<Mutex<()>>, args: Args, dev_input_event_file:
                     if sync == Synchronization::SYN_DROPPED {
                         println!("Dropped events.");
                         modifiers = 0;
-                        keys = vec![]
                     }
                 },
                 evdev::InputEventKind::Key(key) => {
@@ -84,15 +84,6 @@ fn try_proxy_hid_events(mutex: Arc<Mutex<()>>, args: Args, dev_input_event_file:
                             modifiers |= modifier;
                         } else if event.value() == KEY_NOT_PRESSED_VALUE {
                             modifiers &= !modifier;
-                        }
-                    }
-
-                    let hid_symbol = keys::scan_to_hid(&key);
-                    if hid_symbol != 0 {
-                        if event.value() == KEY_PRESSED_VALUE {
-                            keys.push(key)
-                        } else if event.value() == KEY_NOT_PRESSED_VALUE {
-                            keys.retain(|it| it != &key);
                         }
                     }
                 },
@@ -108,6 +99,11 @@ fn try_proxy_hid_events(mutex: Arc<Mutex<()>>, args: Args, dev_input_event_file:
                 evdev::InputEventKind::Other => {},
             }
         }
+
+        let keys: Vec<Key> = match device.cached_state().key_vals() {
+            Some(key_vals) => key_vals.iter().collect(),
+            None => vec![],
+        };
 
         write_report(mutex.clone(), modifiers, &keys)?;
     }
